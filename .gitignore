@@ -1,0 +1,14 @@
+# Compiled binaries
+*.exe
+*.o
+*.obj
+
+# Python caches
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Windows system files
+Thumbs.db
+ehthumbs.db
+Desktop.ini

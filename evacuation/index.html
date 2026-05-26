@@ -1,0 +1,1170 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Evacuation Route Planner</title>
+  <meta name="description" content="Real-time animated evacuation route simulation with BFS pathfinding, fire/gas spread, and live status tracking." />
+  <style>
+    /* ══════════════════════════════════════════════════════
+       DESIGN TOKENS & RESET
+    ══════════════════════════════════════════════════════ */
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg:           #0b0d14;
+      --bg-panel:     #12151f;
+      --bg-card:      #181c2a;
+      --border:       #1f2438;
+      --border-hi:    #2a3050;
+      --text:         #e2e6f3;
+      --text-muted:   #6b7399;
+      --text-dim:     #3d4468;
+      --accent:       #4f8cff;
+      --accent-glow:  #4f8cff44;
+
+      /* Cell colours */
+      --cell-floor:   #141829;
+      --cell-wall:    #252a3d;
+      --cell-wall-hi: #2f3450;
+      --cell-exit:    #00c896;
+      --cell-exit-gw: #00c89655;
+      --cell-fire:    #ff4d00;
+      --cell-fire-gw: #ff4d0066;
+      --cell-gas:     #7c3aed;
+      --cell-gas-gw:  #7c3aed66;
+      --cell-person:  #3b82f6;
+      --cell-moving:  #60a5fa;
+      --cell-moved-gw:#60a5fa33;
+
+      /* Status colours */
+      --clr-moving:   #60a5fa;
+      --clr-safe:     #34d399;
+      --clr-dead:     #f87171;
+      --clr-trapped:  #fbbf24;
+    }
+
+    html, body {
+      height: 100%;
+      background: var(--bg);
+      color: var(--text);
+      font-family: 'Inter', system-ui, sans-serif;
+      font-size: 14px;
+      overflow: hidden;
+    }
+
+    /* ══════════════════════════════════════════════════════
+       LAYOUT
+    ══════════════════════════════════════════════════════ */
+    .app {
+      display: flex;
+      flex-direction: column;
+      height: 100vh;
+      overflow: hidden;
+    }
+
+    /* ── Header ── */
+    header {
+      flex-shrink: 0;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 10px 20px;
+      border-bottom: 1px solid var(--border);
+      background: linear-gradient(135deg, #12151f 0%, #0f1220 100%);
+    }
+
+    .header-title {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .header-title .icon {
+      font-size: 22px;
+      filter: drop-shadow(0 0 8px #ff4d00aa);
+    }
+
+    .header-title h1 {
+      font-size: 16px;
+      font-weight: 700;
+      letter-spacing: .04em;
+      background: linear-gradient(90deg, #e2e6f3, #8899cc);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+
+    .header-meta {
+      display: flex;
+      gap: 16px;
+      align-items: center;
+    }
+
+    .meta-badge {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 4px 10px;
+      border-radius: 20px;
+      border: 1px solid var(--border-hi);
+      background: var(--bg-card);
+      font-size: 12px;
+      font-weight: 500;
+    }
+
+    .meta-badge .dot {
+      width: 8px; height: 8px;
+      border-radius: 50%;
+      background: var(--cell-fire);
+      box-shadow: 0 0 6px var(--cell-fire);
+      animation: pulse-dot 1.5s ease-in-out infinite;
+    }
+
+    .meta-badge .dot.gas { background: var(--cell-gas); box-shadow: 0 0 6px var(--cell-gas); }
+
+    @keyframes pulse-dot {
+      0%, 100% { transform: scale(1); opacity: 1; }
+      50% { transform: scale(1.25); opacity: .7; }
+    }
+
+    /* ── Body: three columns ── */
+    .body {
+      display: flex;
+      flex: 1;
+      overflow: hidden;
+      gap: 0;
+    }
+
+    /* ── Left Panel: Controls + Legend ── */
+    .panel-left {
+      flex-shrink: 0;
+      width: 190px;
+      display: flex;
+      flex-direction: column;
+      gap: 0;
+      border-right: 1px solid var(--border);
+      background: var(--bg-panel);
+      overflow-y: auto;
+    }
+
+    /* ── Center: Grid ── */
+    .panel-center {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      overflow: hidden;
+      position: relative;
+      background: radial-gradient(ellipse at center, #0f1320 0%, var(--bg) 80%);
+    }
+
+    /* ── Right Panel: Status ── */
+    .panel-right {
+      flex-shrink: 0;
+      width: 200px;
+      border-left: 1px solid var(--border);
+      background: var(--bg-panel);
+      overflow-y: auto;
+    }
+
+    /* ── Section header ── */
+    .section-hdr {
+      padding: 10px 14px 6px;
+      font-size: 9px;
+      font-weight: 700;
+      letter-spacing: .12em;
+      color: var(--text-dim);
+      text-transform: uppercase;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .section-body { padding: 10px 12px; }
+
+    /* ══════════════════════════════════════════════════════
+       CONTROLS
+    ══════════════════════════════════════════════════════ */
+    .ctrl-buttons {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 6px;
+      margin-bottom: 12px;
+    }
+
+    .btn {
+      padding: 7px 4px;
+      border: 1px solid var(--border-hi);
+      border-radius: 8px;
+      background: var(--bg-card);
+      color: var(--text);
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all .18s ease;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 4px;
+    }
+
+    .btn:hover { background: #1f2540; border-color: var(--accent); color: var(--accent); }
+    .btn:active { transform: scale(.96); }
+
+    .btn.primary {
+      grid-column: 1 / -1;
+      background: linear-gradient(135deg, #1a3a6e, #1e2c5a);
+      border-color: #2a4a90;
+      color: #7fb4ff;
+    }
+    .btn.primary:hover { background: linear-gradient(135deg, #1e4080, #243268); color: #aaccff; }
+    .btn.danger { border-color: #3a1a1a; color: #f87171; }
+    .btn.danger:hover { background: #2a1212; border-color: #5a2020; }
+
+    /* Speed slider */
+    .speed-label {
+      font-size: 11px;
+      color: var(--text-muted);
+      margin-bottom: 6px;
+      display: flex;
+      justify-content: space-between;
+    }
+
+    input[type=range] {
+      width: 100%;
+      height: 4px;
+      accent-color: var(--accent);
+      cursor: pointer;
+    }
+
+    .speed-indicators {
+      display: flex;
+      justify-content: space-between;
+      font-size: 9px;
+      color: var(--text-dim);
+      margin-top: 3px;
+    }
+
+    /* ══════════════════════════════════════════════════════
+       LEGEND
+    ══════════════════════════════════════════════════════ */
+    .legend-item {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 6px;
+      font-size: 11px;
+      color: var(--text-muted);
+    }
+
+    .legend-swatch {
+      width: 14px; height: 14px;
+      border-radius: 3px;
+      flex-shrink: 0;
+      border: 1px solid #ffffff18;
+    }
+
+    /* ══════════════════════════════════════════════════════
+       GRID
+    ══════════════════════════════════════════════════════ */
+    #grid-wrapper {
+      position: relative;
+    }
+
+    #grid {
+      display: grid;
+      gap: 1px;
+      background: #0a0c14;
+      border: 1px solid var(--border-hi);
+      border-radius: 6px;
+      overflow: hidden;
+      box-shadow: 0 0 40px #00000088;
+    }
+
+    .cell {
+      border-radius: 1px;
+      transition: background .12s ease;
+      position: relative;
+    }
+
+    /* Cell types */
+    .cell-floor  { background: var(--cell-floor); }
+
+    .cell-wall {
+      background: linear-gradient(160deg, var(--cell-wall-hi) 0%, var(--cell-wall) 100%);
+      box-shadow: inset 0 1px 0 #ffffff0c;
+    }
+
+    .cell-exit {
+      background: var(--cell-exit);
+      box-shadow: 0 0 8px var(--cell-exit-gw);
+      animation: glow-exit 2s ease-in-out infinite;
+    }
+
+    @keyframes glow-exit {
+      0%, 100% { box-shadow: 0 0 6px var(--cell-exit-gw); }
+      50% { box-shadow: 0 0 14px #00c89699, 0 0 6px #00c896; }
+    }
+
+    .cell-fire {
+      background: var(--cell-fire);
+      animation: flicker-fire 0.4s ease-in-out infinite alternate;
+    }
+
+    @keyframes flicker-fire {
+      0%   { background: #ff4d00; filter: brightness(1); }
+      33%  { background: #ff6820; filter: brightness(1.1); }
+      66%  { background: #ff3800; filter: brightness(0.9); }
+      100% { background: #ff5c1a; filter: brightness(1.05); }
+    }
+
+    .cell-gas {
+      background: var(--cell-gas);
+      animation: pulse-gas 1.8s ease-in-out infinite;
+    }
+
+    @keyframes pulse-gas {
+      0%, 100% { background: #7c3aed; filter: brightness(1); }
+      50% { background: #9b5cf0; filter: brightness(1.2); }
+    }
+
+    .cell-person {
+      background: var(--cell-person);
+      box-shadow: 0 0 8px #3b82f655;
+    }
+
+    .cell-moving {
+      background: var(--cell-moving);
+      animation: bounce-person .6s ease-in-out infinite alternate;
+    }
+
+    @keyframes bounce-person {
+      0%   { transform: scale(.88); }
+      100% { transform: scale(1.0); }
+    }
+
+    .cell-dot {
+      position: absolute;
+      inset: 15%;
+      border-radius: 50%;
+      pointer-events: none;
+    }
+
+    .dot-moving { background: #fff; opacity: .85; }
+    .dot-safe   { background: var(--clr-safe); opacity: 1; }
+    .dot-dead   { opacity: 0; }
+
+    /* ══════════════════════════════════════════════════════
+       TICK PROGRESS BAR
+    ══════════════════════════════════════════════════════ */
+    .tick-bar-wrap {
+      width: 100%;
+      max-width: 700px;
+      margin-top: 8px;
+    }
+
+    .tick-bar-labels {
+      display: flex;
+      justify-content: space-between;
+      font-size: 10px;
+      color: var(--text-muted);
+      margin-bottom: 4px;
+      font-family: 'JetBrains Mono', monospace;
+    }
+
+    .tick-bar-bg {
+      height: 4px;
+      border-radius: 4px;
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      overflow: hidden;
+    }
+
+    #tick-bar-fill {
+      height: 100%;
+      border-radius: 4px;
+      background: linear-gradient(90deg, #4f8cff, #00c896);
+      transition: width .2s ease;
+    }
+
+    /* ══════════════════════════════════════════════════════
+       STATUS PANEL
+    ══════════════════════════════════════════════════════ */
+    .stat-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 6px;
+      margin-bottom: 10px;
+    }
+
+    .stat-card {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 8px 10px;
+      text-align: center;
+    }
+
+    .stat-card .stat-val {
+      font-size: 22px;
+      font-weight: 700;
+      font-family: 'JetBrains Mono', monospace;
+      line-height: 1;
+    }
+
+    .stat-card .stat-lbl {
+      font-size: 9px;
+      font-weight: 600;
+      letter-spacing: .1em;
+      text-transform: uppercase;
+      color: var(--text-dim);
+      margin-top: 3px;
+    }
+
+    .stat-alive   .stat-val { color: var(--clr-moving); }
+    .stat-safe    .stat-val { color: var(--clr-safe); }
+    .stat-dead    .stat-val { color: var(--clr-dead); }
+    .stat-trapped .stat-val { color: var(--clr-trapped); }
+
+    /* Person cards */
+    .person-card {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 7px 10px;
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      margin-bottom: 5px;
+      transition: border-color .2s;
+    }
+
+    .person-card:hover { border-color: var(--border-hi); }
+
+    .person-id {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 11px;
+      font-weight: 700;
+      color: var(--text-muted);
+      flex-shrink: 0;
+    }
+
+    .person-info { flex: 1; min-width: 0; }
+
+    .person-status {
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: .06em;
+    }
+
+    .person-steps {
+      font-size: 9px;
+      color: var(--text-dim);
+      font-family: 'JetBrains Mono', monospace;
+    }
+
+    .status-MOVING  { color: var(--clr-moving); }
+    .status-SAFE    { color: var(--clr-safe); }
+    .status-DEAD    { color: var(--clr-dead); }
+    .status-TRAPPED { color: var(--clr-trapped); }
+
+    .person-dot {
+      width: 8px; height: 8px;
+      border-radius: 50%;
+      flex-shrink: 0;
+    }
+
+    .pdot-MOVING  { background: var(--clr-moving); box-shadow: 0 0 5px var(--clr-moving); }
+    .pdot-SAFE    { background: var(--clr-safe);   box-shadow: 0 0 5px var(--clr-safe); }
+    .pdot-DEAD    { background: var(--clr-dead);   }
+    .pdot-TRAPPED { background: var(--clr-trapped); }
+
+    /* Tick display in right panel */
+    .tick-display {
+      text-align: center;
+      padding: 12px;
+      background: var(--bg-card);
+      border-radius: 10px;
+      border: 1px solid var(--border);
+      margin-bottom: 10px;
+    }
+
+    .tick-display .tick-num {
+      font-size: 36px;
+      font-weight: 700;
+      font-family: 'JetBrains Mono', monospace;
+      background: linear-gradient(90deg, #4f8cff, #00c896);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      line-height: 1;
+    }
+
+    .tick-display .tick-lbl {
+      font-size: 9px;
+      font-weight: 600;
+      letter-spacing: .14em;
+      text-transform: uppercase;
+      color: var(--text-dim);
+      margin-top: 2px;
+    }
+
+    /* ══════════════════════════════════════════════════════
+       FINAL REPORT MODAL
+    ══════════════════════════════════════════════════════ */
+    #report-overlay {
+      display: none;
+      position: fixed;
+      inset: 0;
+      z-index: 100;
+      background: #0b0d14cc;
+      backdrop-filter: blur(8px);
+      align-items: center;
+      justify-content: center;
+    }
+
+    #report-overlay.visible { display: flex; }
+
+    .report-card {
+      background: var(--bg-panel);
+      border: 1px solid var(--border-hi);
+      border-radius: 20px;
+      padding: 36px 40px;
+      width: 380px;
+      max-width: 90vw;
+      box-shadow: 0 30px 80px #00000088, 0 0 0 1px #ffffff08;
+      animation: slide-in .4s cubic-bezier(.22,1,.36,1);
+    }
+
+    @keyframes slide-in {
+      from { transform: translateY(30px) scale(.95); opacity: 0; }
+      to   { transform: translateY(0) scale(1); opacity: 1; }
+    }
+
+    .report-title {
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: .14em;
+      text-transform: uppercase;
+      color: var(--text-dim);
+      margin-bottom: 24px;
+      text-align: center;
+    }
+
+    .report-score {
+      text-align: center;
+      margin-bottom: 24px;
+    }
+
+    .score-number {
+      font-size: 80px;
+      font-weight: 800;
+      font-family: 'JetBrains Mono', monospace;
+      line-height: 1;
+      transition: color .3s;
+    }
+
+    .score-pct { font-size: 28px; vertical-align: super; font-weight: 600; }
+    .score-number.green { color: #34d399; text-shadow: 0 0 30px #34d39944; }
+    .score-number.amber { color: #fbbf24; text-shadow: 0 0 30px #fbbf2444; }
+    .score-number.red   { color: #f87171; text-shadow: 0 0 30px #f8717144; }
+
+    .score-verdict {
+      font-size: 13px;
+      color: var(--text-muted);
+      margin-top: 6px;
+    }
+
+    .report-stats {
+      display: grid;
+      grid-template-columns: 1fr 1fr 1fr;
+      gap: 10px;
+      margin-bottom: 24px;
+    }
+
+    .rstat {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 10px;
+      text-align: center;
+    }
+
+    .rstat .rv { font-size: 20px; font-weight: 700; font-family: 'JetBrains Mono', monospace; }
+    .rstat .rl { font-size: 9px; font-weight: 600; letter-spacing: .1em; text-transform: uppercase; color: var(--text-dim); margin-top: 2px; }
+    .rv-escaped { color: var(--clr-safe); }
+    .rv-dead    { color: var(--clr-dead); }
+    .rv-trapped { color: var(--clr-trapped); }
+
+    .btn-watch-again {
+      width: 100%;
+      padding: 12px;
+      border-radius: 10px;
+      border: 1px solid var(--border-hi);
+      background: linear-gradient(135deg, #1a3a6e, #1e2c5a);
+      color: #7fb4ff;
+      font-size: 13px;
+      font-weight: 700;
+      cursor: pointer;
+      transition: all .2s;
+      letter-spacing: .04em;
+    }
+
+    .btn-watch-again:hover {
+      background: linear-gradient(135deg, #1e4080, #243268);
+      color: #aaccff;
+      transform: translateY(-1px);
+      box-shadow: 0 4px 20px #4f8cff33;
+    }
+
+    /* ══════════════════════════════════════════════════════
+       ERROR OVERLAY
+    ══════════════════════════════════════════════════════ */
+    #error-overlay {
+      display: none;
+      position: fixed;
+      inset: 0;
+      z-index: 200;
+      background: var(--bg);
+      align-items: center;
+      justify-content: center;
+    }
+
+    #error-overlay.visible { display: flex; }
+
+    .error-card {
+      background: var(--bg-panel);
+      border: 1px solid #3a1a1a;
+      border-radius: 16px;
+      padding: 32px 36px;
+      max-width: 440px;
+      text-align: center;
+    }
+
+    .error-icon { font-size: 40px; margin-bottom: 14px; }
+    .error-title { font-size: 18px; font-weight: 700; color: #f87171; margin-bottom: 8px; }
+    .error-msg { font-size: 13px; color: var(--text-muted); line-height: 1.6; }
+    .error-hint {
+      margin-top: 16px;
+      padding: 12px;
+      background: var(--bg-card);
+      border-radius: 8px;
+      font-size: 11px;
+      color: var(--text-dim);
+      font-family: 'JetBrains Mono', monospace;
+      text-align: left;
+    }
+
+    /* Loading */
+    #loading-overlay {
+      position: fixed;
+      inset: 0;
+      z-index: 150;
+      background: var(--bg);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-direction: column;
+      gap: 16px;
+    }
+
+    .spinner {
+      width: 36px; height: 36px;
+      border: 3px solid var(--border-hi);
+      border-top-color: var(--accent);
+      border-radius: 50%;
+      animation: spin .7s linear infinite;
+    }
+
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    .loading-text { font-size: 13px; color: var(--text-muted); letter-spacing: .04em; }
+
+    /* Scrollbars */
+    ::-webkit-scrollbar { width: 4px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: var(--border-hi); border-radius: 4px; }
+  </style>
+</head>
+<body>
+
+<!-- Loading overlay -->
+<div id="loading-overlay">
+  <div class="spinner"></div>
+  <div class="loading-text">Loading simulation data…</div>
+</div>
+
+<!-- Error overlay -->
+<div id="error-overlay">
+  <div class="error-card">
+    <div class="error-icon">⚠️</div>
+    <div class="error-title">Simulation Data Not Found</div>
+    <div class="error-msg" id="error-msg">
+      Could not load <strong>simulation.json</strong>. Make sure you're running the Python server.
+    </div>
+    <div class="error-hint">
+      Run: python server.py fire 42<br/>
+      Then open: http://localhost:8000
+    </div>
+  </div>
+</div>
+
+<!-- Final Report Overlay -->
+<div id="report-overlay">
+  <div class="report-card">
+    <div class="report-title">🏁 Simulation Complete</div>
+    <div class="report-score">
+      <div class="score-number" id="score-number">
+        <span id="score-val">0</span><span class="score-pct">%</span>
+      </div>
+      <div class="score-verdict" id="score-verdict">Safety Score</div>
+    </div>
+    <div class="report-stats">
+      <div class="rstat">
+        <div class="rv rv-escaped" id="r-escaped">0</div>
+        <div class="rl">Escaped</div>
+      </div>
+      <div class="rstat">
+        <div class="rv rv-dead" id="r-dead">0</div>
+        <div class="rl">Dead</div>
+      </div>
+      <div class="rstat">
+        <div class="rv rv-trapped" id="r-trapped">0</div>
+        <div class="rl">Trapped</div>
+      </div>
+    </div>
+    <div style="text-align:center; font-size:11px; color:var(--text-dim); margin-bottom:18px;">
+      Total ticks: <span id="r-ticks" style="color:var(--text-muted); font-family:monospace;">0</span>
+    </div>
+    <button class="btn-watch-again" id="watch-again-btn">↺ Watch Again</button>
+  </div>
+</div>
+
+<!-- ══════════════════════ MAIN APP ══════════════════════ -->
+<div class="app" id="app" style="display:none;">
+
+  <!-- Header -->
+  <header>
+    <div class="header-title">
+      <span class="icon">🚨</span>
+      <h1>EVACUATION ROUTE PLANNER</h1>
+    </div>
+    <div class="header-meta">
+      <div class="meta-badge">
+        <div class="dot" id="disaster-dot"></div>
+        <span id="disaster-label">FIRE</span>
+      </div>
+      <div class="meta-badge">
+        🌱 Seed: <span id="seed-label" style="font-family:monospace;">—</span>
+      </div>
+      <div class="meta-badge">
+        👥 People: <span id="people-label" style="font-family:monospace;">—</span>
+      </div>
+    </div>
+  </header>
+
+  <!-- Body -->
+  <div class="body">
+
+    <!-- ═══ LEFT PANEL ═══ -->
+    <div class="panel-left">
+      <div class="section-hdr">Controls</div>
+      <div class="section-body">
+        <div class="ctrl-buttons">
+          <button class="btn primary" id="btn-play" style="grid-column:1/-1;">▶ Play</button>
+          <button class="btn" id="btn-step">→ Step</button>
+          <button class="btn danger" id="btn-reset">↺ Reset</button>
+        </div>
+
+        <div class="speed-label">
+          <span>Speed</span>
+          <span id="speed-val-label" style="font-family:monospace; color:var(--text);">600ms</span>
+        </div>
+        <input type="range" id="speed-slider" min="100" max="1500" value="600" step="50" />
+        <div class="speed-indicators">
+          <span>Fast</span>
+          <span>Slow</span>
+        </div>
+      </div>
+
+      <div class="section-hdr" style="margin-top:4px;">Legend</div>
+      <div class="section-body">
+        <div class="legend-item">
+          <div class="legend-swatch" style="background:var(--cell-floor);"></div>
+          <span>Open floor</span>
+        </div>
+        <div class="legend-item">
+          <div class="legend-swatch" style="background:var(--cell-wall); box-shadow:inset 0 1px 0 #fff1;"></div>
+          <span>Wall</span>
+        </div>
+        <div class="legend-item">
+          <div class="legend-swatch" style="background:var(--cell-exit); box-shadow:0 0 6px var(--cell-exit-gw);"></div>
+          <span>Exit / Safe</span>
+        </div>
+        <div class="legend-item">
+          <div class="legend-swatch" id="legend-disaster" style="background:var(--cell-fire);"></div>
+          <span id="legend-disaster-label">Fire</span>
+        </div>
+        <div class="legend-item">
+          <div class="legend-swatch" style="background:var(--cell-moving); border-radius:50%;"></div>
+          <span>Person moving</span>
+        </div>
+        <div class="legend-item">
+          <div class="legend-swatch" style="background:var(--cell-person); border-radius:50%;"></div>
+          <span>Person (start)</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- ═══ CENTER: GRID ═══ -->
+    <div class="panel-center">
+      <div id="grid-wrapper">
+        <div id="grid"></div>
+      </div>
+      <div class="tick-bar-wrap">
+        <div class="tick-bar-labels">
+          <span>Tick <span id="bar-tick">0</span></span>
+          <span id="bar-total">/ —</span>
+        </div>
+        <div class="tick-bar-bg">
+          <div id="tick-bar-fill" style="width:0%;"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ═══ RIGHT PANEL ═══ -->
+    <div class="panel-right">
+      <div class="section-hdr">Status</div>
+      <div class="section-body">
+        <div class="tick-display">
+          <div class="tick-num" id="stat-tick">0</div>
+          <div class="tick-lbl">Current Tick</div>
+        </div>
+        <div class="stat-grid">
+          <div class="stat-card stat-alive">
+            <div class="stat-val" id="stat-alive">0</div>
+            <div class="stat-lbl">Alive</div>
+          </div>
+          <div class="stat-card stat-safe">
+            <div class="stat-val" id="stat-safe">0</div>
+            <div class="stat-lbl">Safe</div>
+          </div>
+          <div class="stat-card stat-dead">
+            <div class="stat-val" id="stat-dead">0</div>
+            <div class="stat-lbl">Dead</div>
+          </div>
+          <div class="stat-card stat-trapped">
+            <div class="stat-val" id="stat-trapped">0</div>
+            <div class="stat-lbl">Trapped</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="section-hdr">People</div>
+      <div class="section-body" id="people-panel">
+        <!-- Person cards injected by JS -->
+      </div>
+    </div>
+
+  </div><!-- /body -->
+</div><!-- /app -->
+
+<script>
+/* ══════════════════════════════════════════════════════════
+   JAVASCRIPT — EVACUATION SIMULATOR FRONTEND
+══════════════════════════════════════════════════════════ */
+
+let sim = null;          // parsed simulation.json
+let currentTick = 0;
+let isPlaying = false;
+let intervalId = null;
+let cellElements = [];   // flat array of grid cell divs
+
+const CELL_CLASSES = {
+  '.': 'cell-floor',
+  '#': 'cell-wall',
+  'E': 'cell-exit',
+  'F': 'cell-fire',
+  'X': 'cell-moving',
+  'P': 'cell-person',
+};
+
+/* ── Fetch simulation data ── */
+async function loadSimulation() {
+  try {
+    const resp = await fetch('simulation.json', { cache: 'no-store' });
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}: ${resp.statusText}`);
+    const text = await resp.text();
+    sim = JSON.parse(text);
+    initApp();
+  } catch (err) {
+    document.getElementById('loading-overlay').style.display = 'none';
+    const ov = document.getElementById('error-overlay');
+    ov.classList.add('visible');
+    document.getElementById('error-msg').innerHTML =
+      `Could not load <strong>simulation.json</strong>.<br/>` +
+      `<em>${err.message}</em><br/><br/>` +
+      `Make sure you're running the Python server.`;
+  }
+}
+
+/* ── Initialise everything once data is loaded ── */
+function initApp() {
+  document.getElementById('loading-overlay').style.display = 'none';
+  document.getElementById('app').style.display = 'flex';
+
+  // Header metadata
+  const disaster = sim.disaster || 'FIRE';
+  document.getElementById('disaster-label').textContent = disaster;
+  document.getElementById('disaster-dot').className = 'dot' + (disaster === 'GAS' ? ' gas' : '');
+  document.getElementById('people-label').textContent = sim.num_people;
+
+  // Try to get seed from URL or show dash
+  const urlParams = new URLSearchParams(window.location.search);
+  const seed = urlParams.get('seed') || '—';
+  document.getElementById('seed-label').textContent = seed;
+
+  // Legend update for disaster
+  if (disaster === 'GAS') {
+    document.getElementById('legend-disaster').style.background = 'var(--cell-gas)';
+    document.getElementById('legend-disaster-label').textContent = 'Toxic Gas';
+  }
+
+  // Build the CSS grid
+  buildGrid();
+
+  // Tick bar total
+  const total = sim.ticks.length;
+  document.getElementById('bar-total').textContent = `/ ${total - 1}`;
+
+  // Watch again button
+  document.getElementById('watch-again-btn').addEventListener('click', () => {
+    document.getElementById('report-overlay').classList.remove('visible');
+    resetSim();
+  });
+
+  // Controls
+  document.getElementById('btn-play').addEventListener('click', togglePlay);
+  document.getElementById('btn-step').addEventListener('click', stepForward);
+  document.getElementById('btn-reset').addEventListener('click', resetSim);
+
+  const slider = document.getElementById('speed-slider');
+  slider.addEventListener('input', () => {
+    const ms = parseInt(slider.value);
+    document.getElementById('speed-val-label').textContent = `${ms}ms`;
+    if (isPlaying) {
+      clearInterval(intervalId);
+      intervalId = setInterval(stepForward, ms);
+    }
+  });
+
+  // Initial render
+  renderTick(0);
+}
+
+/* ── Build empty grid ── */
+function buildGrid() {
+  const grid = document.getElementById('grid');
+  grid.innerHTML = '';
+  cellElements = [];
+
+  const rows = sim.rows;
+  const cols = sim.cols;
+
+  // Calculate cell size
+  const wrapper = document.getElementById('grid-wrapper');
+  const panelCenter = document.querySelector('.panel-center');
+  const availW = panelCenter.clientWidth - 32;
+  const availH = panelCenter.clientHeight - 60;
+  const cellW = Math.floor((availW - cols) / cols);
+  const cellH = Math.floor((availH - rows) / rows);
+  const cellSize = Math.max(18, Math.min(28, Math.min(cellW, cellH)));
+
+  grid.style.gridTemplateColumns = `repeat(${cols}, ${cellSize}px)`;
+  grid.style.gridTemplateRows    = `repeat(${rows}, ${cellSize}px)`;
+
+  for (let r = 0; r < rows; r++) {
+    for (let c = 0; c < cols; c++) {
+      const div = document.createElement('div');
+      div.className = 'cell cell-floor';
+      div.style.width  = cellSize + 'px';
+      div.style.height = cellSize + 'px';
+      grid.appendChild(div);
+      cellElements.push(div);
+    }
+  }
+}
+
+/* ── Render a specific tick ── */
+function renderTick(tickIdx) {
+  currentTick = tickIdx;
+  const t = sim.ticks[tickIdx];
+  if (!t) return;
+
+  const rows = sim.rows;
+  const cols = sim.cols;
+  const disaster = sim.disaster;
+
+  // Build set of person positions this tick
+  const personMap = {}; // "r,c" → person object
+  for (const p of t.people) {
+    personMap[`${p.row},${p.col}`] = p;
+  }
+
+  // Update cells
+  for (let r = 0; r < rows; r++) {
+    const rowStr = t.grid[r] || '';
+    for (let c = 0; c < cols; c++) {
+      const ch = rowStr[c] || '.';
+      const div = cellElements[r * cols + c];
+      const key = `${r},${c}`;
+      const person = personMap[key];
+
+      // Remove old dot child
+      div.innerHTML = '';
+
+      let cls = 'cell ';
+      if (ch === 'F') {
+        cls += (disaster === 'GAS') ? 'cell-gas' : 'cell-fire';
+      } else if (ch === '#') {
+        cls += 'cell-wall';
+      } else if (ch === 'E') {
+        cls += 'cell-exit';
+      } else if (ch === 'P') {
+        cls += 'cell-person';
+        addDot(div, 'dot-moving');
+      } else if (ch === 'X' && person) {
+        cls += 'cell-moving';
+        addDot(div, 'dot-moving');
+      } else if (ch === 'X') {
+        cls += 'cell-moving';
+        addDot(div, 'dot-moving');
+      } else {
+        cls += 'cell-floor';
+      }
+
+      // Person on exit = safe
+      if (person && person.status === 'SAFE' && ch === 'E') {
+        addDot(div, 'dot-safe');
+      }
+
+      div.className = cls;
+    }
+  }
+
+  // Status panel
+  document.getElementById('stat-tick').textContent    = t.tick;
+  document.getElementById('stat-alive').textContent   = t.alive;
+  document.getElementById('stat-safe').textContent    = t.safe;
+  document.getElementById('stat-dead').textContent    = t.dead;
+  document.getElementById('stat-trapped').textContent = t.trapped;
+
+  // Person cards
+  updatePeoplePanel(t.people);
+
+  // Tick bar
+  const total = sim.ticks.length;
+  const pct = total > 1 ? (tickIdx / (total - 1)) * 100 : 100;
+  document.getElementById('tick-bar-fill').style.width = pct + '%';
+  document.getElementById('bar-tick').textContent = t.tick;
+}
+
+function addDot(parent, cls) {
+  const d = document.createElement('div');
+  d.className = `cell-dot ${cls}`;
+  parent.appendChild(d);
+}
+
+/* ── Update right-panel person cards ── */
+function updatePeoplePanel(people) {
+  const panel = document.getElementById('people-panel');
+
+  if (panel.children.length !== people.length) {
+    panel.innerHTML = '';
+    for (const p of people) {
+      const card = document.createElement('div');
+      card.className = 'person-card';
+      card.id = `pcard-${p.id}`;
+      card.innerHTML = `
+        <div class="person-id">P${p.id}</div>
+        <div class="person-info">
+          <div class="person-status status-${p.status}" id="pst-${p.id}">${p.status}</div>
+          <div class="person-steps" id="psp-${p.id}">Steps: ${p.steps}</div>
+        </div>
+        <div class="person-dot pdot-${p.status}" id="pdot-${p.id}"></div>
+      `;
+      panel.appendChild(card);
+    }
+  } else {
+    for (const p of people) {
+      const st = document.getElementById(`pst-${p.id}`);
+      const sp = document.getElementById(`psp-${p.id}`);
+      const dot = document.getElementById(`pdot-${p.id}`);
+      if (st) { st.textContent = p.status; st.className = `person-status status-${p.status}`; }
+      if (sp) { sp.textContent = `Steps: ${p.steps}`; }
+      if (dot) { dot.className = `person-dot pdot-${p.status}`; }
+    }
+  }
+}
+
+/* ── Play / Pause ── */
+function togglePlay() {
+  if (isPlaying) pauseSim();
+  else playSim();
+}
+
+function playSim() {
+  isPlaying = true;
+  document.getElementById('btn-play').textContent = '⏸ Pause';
+  const ms = parseInt(document.getElementById('speed-slider').value);
+  intervalId = setInterval(stepForward, ms);
+}
+
+function pauseSim() {
+  isPlaying = false;
+  document.getElementById('btn-play').textContent = '▶ Play';
+  clearInterval(intervalId);
+}
+
+function stepForward() {
+  if (currentTick >= sim.ticks.length - 1) {
+    pauseSim();
+    showReport();
+    return;
+  }
+  renderTick(currentTick + 1);
+}
+
+function resetSim() {
+  pauseSim();
+  renderTick(0);
+}
+
+/* ── Final Report ── */
+function showReport() {
+  const last = sim.ticks[sim.ticks.length - 1];
+  const numPeople = sim.num_people;
+  const escaped = last.safe;
+  const dead = last.dead;
+  const trapped = last.trapped;
+  const score = numPeople > 0 ? Math.round((escaped / numPeople) * 100) : 0;
+
+  document.getElementById('score-val').textContent = score;
+  document.getElementById('r-escaped').textContent = escaped;
+  document.getElementById('r-dead').textContent    = dead;
+  document.getElementById('r-trapped').textContent = trapped;
+  document.getElementById('r-ticks').textContent   = last.tick;
+  document.getElementById('score-verdict').textContent =
+    `${escaped} of ${numPeople} survived the ${sim.disaster}`;
+
+  const sn = document.getElementById('score-number');
+  sn.className = 'score-number ' + (score >= 80 ? 'green' : score >= 40 ? 'amber' : 'red');
+
+  document.getElementById('report-overlay').classList.add('visible');
+}
+
+/* ── Start ── */
+loadSimulation();
+</script>
+</body>
+</html>
