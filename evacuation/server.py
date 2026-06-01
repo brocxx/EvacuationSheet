@@ -158,6 +158,44 @@ class EvacuationHandler(http.server.BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(data)
 
+    def do_POST(self):
+        import json
+        import random
+        if self.path == '/api/generate_random':
+            seed = str(random.randint(1, 1000000))
+            run_cmd = list(RUN_CMD_BASE) + [disaster, seed]
+            subprocess.run(run_cmd, cwd=SCRIPT_DIR, capture_output=True, text=True)
+            self.send_response(200)
+            self.send_header('Content-Type', 'application/json')
+            self.end_headers()
+            self.wfile.write(json.dumps({'status': 'ok', 'seed': seed}).encode('utf-8'))
+            return
+        elif self.path == '/api/simulate_custom':
+            content_length = int(self.headers.get('Content-Length', 0))
+            if content_length > 0:
+                post_data = self.rfile.read(content_length)
+                try:
+                    data = json.loads(post_data.decode('utf-8'))
+                    grid = data.get('grid', [])
+                    map_path = os.path.join(SCRIPT_DIR, "custom_map.txt")
+                    with open(map_path, "w") as f:
+                        for row in grid:
+                            f.write(row + "\n")
+                    run_cmd = list(RUN_CMD_BASE) + ["--map", "custom_map.txt"]
+                    subprocess.run(run_cmd, cwd=SCRIPT_DIR, capture_output=True, text=True)
+                    self.send_response(200)
+                    self.send_header('Content-Type', 'application/json')
+                    self.end_headers()
+                    self.wfile.write(json.dumps({'status': 'ok'}).encode('utf-8'))
+                    return
+                except Exception as e:
+                    self.send_error(400, f"Bad Request: {str(e)}")
+                    return
+            self.send_error(400, "Bad Request")
+            return
+            
+        self.send_error(404, "Not Found")
+
 
 print(f"\n[3/3] Starting HTTP server on port {PORT} ...")
 print(f"\n{'=' * 56}")

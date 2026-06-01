@@ -48,7 +48,7 @@ typedef struct {
     int path_len;
     int path_idx;
     int start_r, start_c;
-} Person;
+} Person; //represents a person in the simulation, with their current position, status, and path to exit
 
 typedef struct {
     char cells[ROWS][COLS];
@@ -61,7 +61,7 @@ typedef struct {
     int person_col[MAX_PEOPLE];
     char person_status[MAX_PEOPLE][10];
     int person_steps[MAX_PEOPLE];
-} TickSnapshot;
+} TickSnapshot; //contains the state of the grid and people at a given tick for JSON export
 
 /* ─────────────────────────────────────────────────────── */
 /*  GLOBALS                                                */
@@ -71,10 +71,10 @@ char grid[ROWS][COLS];
 Person people[MAX_PEOPLE];
 int num_people = MAX_PEOPLE;
 int num_exits  = 3;
-DisasterType disaster_type = FIRE;
-int tick = 0;
-TickSnapshot snapshots[MAX_TICKS + 1];
-int num_snapshots = 0;
+DisasterType disaster_type = FIRE; //enum value
+int tick = 0; 
+TickSnapshot snapshots[MAX_TICKS + 1]; //struct array to hold snapshots of each tick for later JSON export
+int num_snapshots = 0;//number of snapshots recorded, used to track how many ticks have been simulated and stored in the snapshots array
 
 /* ─────────────────────────────────────────────────────── */
 /*  HELPERS                                                */
@@ -105,6 +105,50 @@ static void flood_fill(int r, int c) {
     flood_fill(r + 1, c);
     flood_fill(r, c - 1);
     flood_fill(r, c + 1);
+}
+
+void load_map_from_file(const char* filename) {
+    FILE *f = fopen(filename, "r");
+    if (!f) {
+        fprintf(stderr, "ERROR: Cannot open map file %s\n", filename);
+        exit(1);
+    }
+    num_people = 0;
+    num_exits = 0;
+
+    for (int r = 0; r < ROWS; r++) {
+        char line[256];
+        if (!fgets(line, sizeof(line), f)) {
+            for (int c = 0; c < COLS; c++) grid[r][c] = '.';
+            continue;
+        }
+        for (int c = 0; c < COLS; c++) {
+            if (line[c] == '\0' || line[c] == '\n' || line[c] == '\r') {
+                for (; c < COLS; c++) grid[r][c] = '.';
+                break;
+            }
+            grid[r][c] = line[c];
+            if (line[c] == 'P') {
+                if (num_people < MAX_PEOPLE) {
+                    people[num_people].row = r;
+                    people[num_people].col = c;
+                    people[num_people].id = num_people;
+                    people[num_people].status = MOVING;
+                    people[num_people].steps_taken = 0;
+                    people[num_people].path_len = 0;
+                    people[num_people].path_idx = 0;
+                    people[num_people].start_r = r;
+                    people[num_people].start_c = c;
+                    num_people++;
+                } else {
+                    grid[r][c] = '.'; /* Too many people */
+                }
+            } else if (line[c] == 'E') {
+                num_exits++;
+            }
+        }
+    }
+    fclose(f);
 }
 
 void generate_map(int seed) {
@@ -577,20 +621,30 @@ void print_grid_terminal(void) {
 
 int main(int argc, char *argv[]) {
     int seed = (int)time(NULL);
+    char *map_file = NULL;
 
-    /* Parse disaster type */
-    if (argc >= 2) {
-        if (strcmp(argv[1], "gas") == 0) disaster_type = GAS;
-        else disaster_type = FIRE;
+    /* Parse args */
+    for (int i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "--map") == 0 && i + 1 < argc) {
+            map_file = argv[++i];
+        } else if (strcmp(argv[i], "gas") == 0) {
+            disaster_type = GAS;
+        } else if (strcmp(argv[i], "fire") == 0) {
+            disaster_type = FIRE;
+        } else {
+            seed = atoi(argv[i]);
+        }
     }
 
-    /* Parse seed */
-    if (argc >= 3) seed = atoi(argv[2]);
-
     printf("Evacuation Simulator\n");
-    printf("Disaster: %s | Seed: %d\n", disaster_type == FIRE ? "FIRE" : "GAS", seed);
 
-    generate_map(seed);
+    if (map_file) {
+        printf("Disaster: %s | Custom Map: %s\n", disaster_type == FIRE ? "FIRE" : "GAS", map_file);
+        load_map_from_file(map_file);
+    } else {
+        printf("Disaster: %s | Seed: %d\n", disaster_type == FIRE ? "FIRE" : "GAS", seed);
+        generate_map(seed);
+    }
 
     /* Tick 0 snapshot */
     tick = 0;

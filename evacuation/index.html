@@ -222,6 +222,23 @@
     .btn.danger { border-color: #3a1a1a; color: #f87171; }
     .btn.danger:hover { background: #2a1212; border-color: #5a2020; }
 
+    .btn-brush {
+      padding: 4px 8px;
+      font-size: 11px;
+      border: 1px solid var(--border-hi);
+      border-radius: 4px;
+      background: var(--bg-panel);
+      color: var(--text-muted);
+      cursor: pointer;
+      flex: 1;
+      text-align: center;
+    }
+    .btn-brush.active {
+      border-color: var(--accent);
+      color: var(--accent);
+      background: #1f2540;
+    }
+
     /* Speed slider */
     .speed-label {
       font-size: 11px;
@@ -776,6 +793,23 @@
           <button class="btn danger" id="btn-reset">↺ Reset</button>
         </div>
 
+        <div class="ctrl-buttons" style="margin-top:8px;">
+          <button class="btn" id="btn-edit" style="grid-column:1/-1; background:#2a2f4c; border-color:#3d4468;">✏️ Map Editor</button>
+          <button class="btn" id="btn-random" style="grid-column:1/-1;">🎲 Randomize Map</button>
+        </div>
+
+        <div id="editor-palette" style="display:none; margin-top:12px; padding:10px; background:var(--bg-card); border-radius:8px; border:1px solid var(--border);">
+          <div style="font-size:10px; font-weight:700; color:var(--text-muted); margin-bottom:8px; text-transform:uppercase;">Brush</div>
+          <div style="display:flex; flex-wrap:wrap; gap:6px;">
+            <button class="btn-brush" data-brush=".">Floor</button>
+            <button class="btn-brush active" data-brush="#">Wall</button>
+            <button class="btn-brush" data-brush="E">Exit</button>
+            <button class="btn-brush" data-brush="P">Person</button>
+            <button class="btn-brush" data-brush="F">Fire/Gas</button>
+          </div>
+          <button class="btn primary" id="btn-run-custom" style="width:100%; margin-top:10px;">Run Custom Sim</button>
+        </div>
+
         <div class="speed-label">
           <span>Speed</span>
           <span id="speed-val-label" style="font-family:monospace; color:var(--text);">600ms</span>
@@ -877,6 +911,9 @@
 let sim = null;          // parsed simulation.json
 let currentTick = 0;
 let isPlaying = false;
+let isEditing = false;
+let currentBrush = '#';
+let currentGrid = [];
 let intervalId = null;
 let cellElements = [];   // flat array of grid cell divs
 
@@ -947,6 +984,17 @@ function initApp() {
   document.getElementById('btn-play').addEventListener('click', togglePlay);
   document.getElementById('btn-step').addEventListener('click', stepForward);
   document.getElementById('btn-reset').addEventListener('click', resetSim);
+  document.getElementById('btn-edit').addEventListener('click', toggleEditor);
+  document.getElementById('btn-random').addEventListener('click', randomizeMap);
+  document.getElementById('btn-run-custom').addEventListener('click', runCustomSim);
+
+  document.querySelectorAll('.btn-brush').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      document.querySelectorAll('.btn-brush').forEach(b => b.classList.remove('active'));
+      e.target.classList.add('active');
+      currentBrush = e.target.getAttribute('data-brush');
+    });
+  });
 
   const slider = document.getElementById('speed-slider');
   slider.addEventListener('input', () => {
@@ -989,6 +1037,7 @@ function buildGrid() {
       div.className = 'cell cell-floor';
       div.style.width  = cellSize + 'px';
       div.style.height = cellSize + 'px';
+      div.addEventListener('click', () => onCellClick(r, c));
       grid.appendChild(div);
       cellElements.push(div);
     }
@@ -1138,6 +1187,97 @@ function stepForward() {
 function resetSim() {
   pauseSim();
   renderTick(0);
+}
+
+/* ── Editor Mode ── */
+function toggleEditor() {
+  isEditing = !isEditing;
+  const btnEdit = document.getElementById('btn-edit');
+  const palette = document.getElementById('editor-palette');
+  const btnPlay = document.getElementById('btn-play');
+  const btnStep = document.getElementById('btn-step');
+
+  if (isEditing) {
+    pauseSim();
+    btnEdit.style.background = '#3d4468';
+    btnEdit.textContent = '❌ Close Editor';
+    palette.style.display = 'block';
+    btnPlay.disabled = true;
+    btnStep.disabled = true;
+    
+    // Copy current initial grid for editing
+    currentGrid = JSON.parse(JSON.stringify(sim.ticks[0].grid));
+    renderEditorGrid();
+  } else {
+    btnEdit.style.background = '#2a2f4c';
+    btnEdit.textContent = '✏️ Map Editor';
+    palette.style.display = 'none';
+    btnPlay.disabled = false;
+    btnStep.disabled = false;
+    renderTick(0);
+  }
+}
+
+function renderEditorGrid() {
+  const rows = sim.rows;
+  const cols = sim.cols;
+  for (let r = 0; r < rows; r++) {
+    for (let c = 0; c < cols; c++) {
+      const ch = currentGrid[r][c];
+      const div = cellElements[r * cols + c];
+      div.innerHTML = '';
+      
+      let cls = 'cell ';
+      if (ch === 'F') cls += (sim.disaster === 'GAS') ? 'cell-gas' : 'cell-fire';
+      else if (ch === '#') cls += 'cell-wall';
+      else if (ch === 'E') cls += 'cell-exit';
+      else if (ch === 'P') { cls += 'cell-person'; addDot(div, 'dot-moving'); }
+      else cls += 'cell-floor';
+      
+      div.className = cls;
+    }
+  }
+}
+
+function onCellClick(r, c) {
+  if (!isEditing) return;
+  if (r === 0 || r === sim.rows - 1 || c === 0 || c === sim.cols - 1) {
+    if (currentBrush !== '#' && currentBrush !== 'E') return; // Only walls and exits on borders
+  }
+  
+  let rowStr = currentGrid[r];
+  currentGrid[r] = rowStr.substring(0, c) + currentBrush + rowStr.substring(c + 1);
+  renderEditorGrid();
+}
+
+async function randomizeMap() {
+  document.getElementById('loading-overlay').style.display = 'flex';
+  document.getElementById('loading-overlay').querySelector('.loading-text').textContent = 'Generating random map...';
+  try {
+    const res = await fetch('/api/generate_random', { method: 'POST' });
+    if (!res.ok) throw new Error('Random generation failed');
+    location.reload();
+  } catch(e) {
+    alert(e.message);
+    document.getElementById('loading-overlay').style.display = 'none';
+  }
+}
+
+async function runCustomSim() {
+  document.getElementById('loading-overlay').style.display = 'flex';
+  document.getElementById('loading-overlay').querySelector('.loading-text').textContent = 'Simulating custom map...';
+  try {
+    const res = await fetch('/api/simulate_custom', { 
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ grid: currentGrid })
+    });
+    if (!res.ok) throw new Error('Custom simulation failed');
+    location.reload();
+  } catch(e) {
+    alert(e.message);
+    document.getElementById('loading-overlay').style.display = 'none';
+  }
 }
 
 /* ── Final Report ── */
