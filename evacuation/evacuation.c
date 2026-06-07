@@ -616,17 +616,81 @@ void print_grid_terminal(void) {
 }
 
 /* ─────────────────────────────────────────────────────── */
+/*  MODULE 9 — MAP NAME LOG (File Handling)                 */
+/* ─────────────────────────────────────────────────────── */
+
+/*
+ * save_map_name()  — Asks the user for a session/map name via scanf,
+ *                    then writes it along with disaster type and seed
+ *                    to map_log.txt using file I/O (fprintf).
+ *
+ * read_map_name()  — Opens map_log.txt and reads the last saved entry
+ *                    back using fgets, then prints it in the summary.
+ */
+
+static char saved_map_name[128]; /* global so read fn can access it */
+
+/* pre_name: pass a non-NULL string to skip the scanf prompt (used by
+ *           server.py via --name flag). Pass NULL for interactive mode. */
+void save_map_name(int seed, const char *disaster_label, const char *pre_name) {
+    char name[64];
+
+    if (pre_name) {
+        /* Name supplied via --name flag (non-interactive / web server mode) */
+        strncpy(name, pre_name, sizeof(name) - 1);
+        name[sizeof(name) - 1] = '\0';
+    } else {
+        /* Interactive terminal mode — ask the user with scanf */
+        printf("\nEnter a name for this simulation map: ");
+        fflush(stdout);
+        if (scanf("%63s", name) != 1) {
+            strcpy(name, "unnamed");
+        }
+        /* Consume leftover newline so subsequent fgets calls aren't broken */
+        int ch;
+        while ((ch = getchar()) != '\n' && ch != EOF);
+    }
+
+    /* Copy into global so we can display it later without re-reading */
+    strcpy(saved_map_name, name);
+
+    /* Append the entry to map_log.txt */
+    FILE *log = fopen("map_log.txt", "a");
+    if (log) {
+        fprintf(log, "Map: %-20s | Disaster: %-4s | Seed: %d\n",
+                name, disaster_label, seed);
+        fclose(log);
+    }
+}
+
+void print_map_log(void) {
+    FILE *log = fopen("map_log.txt", "r");
+    if (!log) return; /* file may not exist on first run */
+
+    printf("\n--- Map Session Log (map_log.txt) ---\n");
+    char line[256];
+    while (fgets(line, sizeof(line), log)) {
+        printf("  %s", line);
+    }
+    fclose(log);
+    printf("-------------------------------------\n");
+}
+
+/* ─────────────────────────────────────────────────────── */
 /*  MAIN                                                   */
 /* ─────────────────────────────────────────────────────── */
 
 int main(int argc, char *argv[]) {
     int seed = (int)time(NULL);
     char *map_file = NULL;
+    char *cli_name = NULL; /* set via --name flag (server mode) */
 
     /* Parse args */
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--map") == 0 && i + 1 < argc) {
             map_file = argv[++i];
+        } else if (strcmp(argv[i], "--name") == 0 && i + 1 < argc) {
+            cli_name = argv[++i]; /* name supplied by server — skip scanf */
         } else if (strcmp(argv[i], "gas") == 0) {
             disaster_type = GAS;
         } else if (strcmp(argv[i], "fire") == 0) {
@@ -638,13 +702,18 @@ int main(int argc, char *argv[]) {
 
     printf("Evacuation Simulator\n");
 
+    const char *disaster_label = (disaster_type == FIRE) ? "FIRE" : "GAS";
+
     if (map_file) {
-        printf("Disaster: %s | Custom Map: %s\n", disaster_type == FIRE ? "FIRE" : "GAS", map_file);
+        printf("Disaster: %s | Custom Map: %s\n", disaster_label, map_file);
         load_map_from_file(map_file);
     } else {
-        printf("Disaster: %s | Seed: %d\n", disaster_type == FIRE ? "FIRE" : "GAS", seed);
+        printf("Disaster: %s | Seed: %d\n", disaster_label, seed);
         generate_map(seed);
     }
+
+    /* Name this session: interactive prompt (terminal) or --name arg (server) */
+    save_map_name(seed, disaster_label, cli_name);
 
     /* Tick 0 snapshot */
     tick = 0;
@@ -686,8 +755,13 @@ int main(int argc, char *argv[]) {
     printf(" Dead:          %d\n", final_dead);
     printf(" Trapped:       %d\n", final_trapped);
     printf(" Safety Score:  %.0f%%\n", num_people > 0 ? (100.0 * final_safe / num_people) : 0.0);
+    printf(" Map Name:      %s\n", saved_map_name[0] ? saved_map_name : "(unnamed)");
     printf("══════════════════════════════\n");
 
     export_json();
+
+    /* Print the full running log of all saved sessions */
+    print_map_log();
+
     return 0;
 }

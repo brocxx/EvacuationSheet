@@ -19,7 +19,7 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 if sys.platform == "win32":
     EXEC_NAME = "evacuation.exe"
     COMPILE_CMD = ["gcc", "-o", EXEC_NAME, "evacuation.c", "-lm"]
-    RUN_CMD_BASE = [EXEC_NAME]
+    RUN_CMD_BASE = [os.path.join(SCRIPT_DIR, EXEC_NAME)]
 else:
     EXEC_NAME = "./evacuation"
     COMPILE_CMD = ["gcc", "-o", "evacuation", "evacuation.c", "-lm"]
@@ -40,6 +40,8 @@ try:
         cwd=SCRIPT_DIR,
         capture_output=True,
         text=True,
+        encoding="utf-8",
+        errors="replace",
         timeout=30
     )
     if result.returncode != 0:
@@ -70,7 +72,7 @@ if len(sys.argv) >= 2:
 if len(sys.argv) >= 3:
     seed = sys.argv[2]
 
-run_cmd = list(RUN_CMD_BASE) + [disaster]
+run_cmd = list(RUN_CMD_BASE) + [disaster, "--name", "ServerStart"]
 if seed is not None:
     run_cmd.append(seed)
 
@@ -84,6 +86,8 @@ try:
         cwd=SCRIPT_DIR,
         capture_output=False,   # Let stdout flow to terminal
         text=True,
+        encoding="utf-8",
+        errors="replace",
         timeout=60
     )
     if sim_result.returncode != 0:
@@ -163,8 +167,8 @@ class EvacuationHandler(http.server.BaseHTTPRequestHandler):
         import random
         if self.path == '/api/generate_random':
             seed = str(random.randint(1, 1000000))
-            run_cmd = list(RUN_CMD_BASE) + [disaster, seed]
-            subprocess.run(run_cmd, cwd=SCRIPT_DIR, capture_output=True, text=True)
+            run_cmd = list(RUN_CMD_BASE) + [disaster, seed, "--name", f"Random-{seed}"]
+            subprocess.run(run_cmd, cwd=SCRIPT_DIR, capture_output=True, text=True, encoding="utf-8", errors="replace")
             self.send_response(200)
             self.send_header('Content-Type', 'application/json')
             self.end_headers()
@@ -181,8 +185,9 @@ class EvacuationHandler(http.server.BaseHTTPRequestHandler):
                     with open(map_path, "w") as f:
                         for row in grid:
                             f.write(row + "\n")
-                    run_cmd = list(RUN_CMD_BASE) + ["--map", "custom_map.txt"]
-                    subprocess.run(run_cmd, cwd=SCRIPT_DIR, capture_output=True, text=True)
+                    map_name = data.get('name', 'CustomMap')
+                    run_cmd = list(RUN_CMD_BASE) + ["--map", "custom_map.txt", "--name", map_name]
+                    subprocess.run(run_cmd, cwd=SCRIPT_DIR, capture_output=True, text=True, encoding="utf-8", errors="replace")
                     self.send_response(200)
                     self.send_header('Content-Type', 'application/json')
                     self.end_headers()

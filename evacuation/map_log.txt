@@ -1,0 +1,6 @@
+Map: ServerStart          | Disaster: FIRE | Seed: 1780762015
+Map: ServerStart          | Disaster: FIRE | Seed: 1780809163
+Map: Random-113711        | Disaster: FIRE | Seed: 113711
+Map: Random-693669        | Disaster: FIRE | Seed: 693669
+Map: CustomMap            | Disaster: FIRE | Seed: 1780809380
+Map: CustomMap            | Disaster: FIRE | Seed: 1780809406
